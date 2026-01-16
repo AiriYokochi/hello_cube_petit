@@ -3,7 +3,8 @@
 Cube Petit 実機上で動作するヘルプアプリケーションです。  
 起動後、UIからハードウェアチェックや各種リンク、会話機能などを利用できます。
 
-<img src="img/01_app.png"/>
+クリックしてフル再生
+[![demo](img/demo_thumb.gif)](img/demo.mp4)
 
 ## Independency
 - Cube Petit (Ver3.0)
@@ -33,11 +34,12 @@ source setup_llm.bash
 ```bash
 uv run python app/app.py
 ```
+<img src="img/01_app.png"/>
 
 ## Function
 ### 1. Chat Bot (チャットボット)
 UI上部の入力欄から会話できます。
-（ローカルLLM / ChatGPT連携は今後拡張予定）
+ローカルLLMまたは人工無能で返答します。
 
 ### 2. Hardware Check (ハードウェアチェック)
 Cube Petit 実機の接続状態をチェックし、結果をまとめて表示します。
