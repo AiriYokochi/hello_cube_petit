@@ -20,6 +20,14 @@ cd hello_cube_petit/
 uv sync
 ```
 
+ローカルLLMでの会話機能を試したい場合は以下を実行してください<br/>
+モデルのダウンロードに時間がかかります。
+```bash
+cd setup
+source setup_llm.bash
+```
+
+
 ## Run
 
 ```bash

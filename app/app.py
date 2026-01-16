@@ -16,6 +16,22 @@ import hardware_check
 from PySide6.QtWidgets import QDialog, QListWidget, QListWidgetItem
 import commands
 from custom_dialog import CustomDialog
+from llm_ollama import ask_ollama
+from instruction_loader import (
+    load_instruction_text,
+    load_spec_summary_text,
+    load_spec_full_text,
+)
+import requests
+from PySide6.QtWidgets import QScrollArea
+
+
+def is_ollama_available() -> bool:
+    try:
+        r = requests.get("http://localhost:11434", timeout=1.0)
+        return r.status_code == 200
+    except Exception:
+        return False
 
 class CommandMenuDialog(QDialog):
     def __init__(self, main_window):
@@ -168,6 +184,23 @@ class HardwareCheckWorker(QThread):
 
         self.summary.emit(summary)
 
+class LLMWorker(QThread):
+    finished_text = Signal(str)
+    error = Signal(str)
+
+    def __init__(self, prompt: str, model: str = "qwen2.5:7b-instruct"):
+        super().__init__()
+        self.prompt = prompt
+        self.model = model
+
+    def run(self):
+        try:
+            reply = ask_ollama(self.prompt, self.model)
+            if not reply:
+                reply = "うまく返事できなかったかも…もう一回言ってみて！"
+            self.finished_text.emit(reply)
+        except Exception as e:
+            self.error.emit(str(e))
 
 # ----------------------------
 # メインUI
@@ -223,6 +256,8 @@ class MainWindow(QWidget):
         right_top.setSpacing(8)
 
         self.balloon = QLabel("こんにちは！何がしたい？")
+        self.balloon.setWordWrap(True)
+        self.balloon.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.balloon.setStyleSheet("""
             QLabel {
                 background-color: white;
@@ -230,8 +265,20 @@ class MainWindow(QWidget):
                 padding: 12px;
             }
         """)
-        self.balloon.setWordWrap(True)
-        self.balloon.setMinimumHeight(80)
+
+        # 吹き出しスクロール
+        self.balloon_scroll = QScrollArea()
+        self.balloon_scroll.setWidgetResizable(True)
+        self.balloon_scroll.setFrameShape(QFrame.NoFrame)
+        self.balloon_scroll.setStyleSheet("""
+            QScrollArea {
+                background: transparent;
+            }
+        """)
+        self.balloon_scroll.setWidget(self.balloon)
+
+        # 高さを確保（ここ重要）
+        self.balloon_scroll.setMinimumHeight(120)
 
         input_row = QHBoxLayout()
         self.input = QLineEdit()
@@ -249,7 +296,7 @@ class MainWindow(QWidget):
         input_row.addWidget(self.input, 1)
         input_row.addWidget(self.enter_btn)
 
-        right_top.addWidget(self.balloon)
+        right_top.addWidget(self.balloon_scroll)
         right_top.addLayout(input_row)
 
         top_area.addWidget(self.robot_img)
@@ -325,6 +372,53 @@ class MainWindow(QWidget):
         root.addLayout(top_area, 1)
         root.addWidget(bottom_frame, 1)
 
+        self.instruction_text = load_instruction_text()
+        self.spec_summary_text = load_spec_summary_text()
+        self.spec_full_text = load_spec_full_text()
+        self.llm_enabled = is_ollama_available()
+
+        if self.llm_enabled:
+            self.log("[LLM] Ollama OK (LLM enabled)")
+            self.say("ローカルLLMが使えるよ！話しかけてね！")
+        else:
+            self.log("[LLM] Ollama NG (fallback mode)")
+            self.say("いまは無能モードだよ…（LLMが起動してないかも）")
+            
+
+
+
+    def dumb_bot_reply(self, user_text: str) -> str:
+        # かわいい無能ボット（適当に返す）
+        if "こんにちは" in user_text:
+            return "こんにちは！…えっと、次どうすればいい？"
+        if "チェック" in user_text:
+            return "チェックしたいんだね！ボタン押してみて！"
+        if "ありがとう" in user_text:
+            return "えへへ…どういたしまして！"
+
+        return "ごめん、よくわかんなかった！もうちょっと簡単に言って〜！"
+
+    def needs_spec_full(self, user_text: str) -> bool:
+        keywords = [
+            "仕様", "詳細", "できること", "使い方", "機能",
+            "ハードウェアチェック", "カスタム", "コマンド集",
+            "エラー", "動かない", "接続", "設定", "voice.yaml", "personality.yaml"
+        ]
+        return any(k in user_text for k in keywords)
+
+    def on_llm_error(self, err: str):
+        self.log(f"[LLM ERROR] {err}")
+
+        # ここで無能モードに切り替える（安全）
+        self.llm_enabled = False
+
+        self.say("ごめんね、LLMが使えなくなったから無能モードになるよ…")
+        self.log("[LLM] fallback to dumb bot mode")
+        
+    def on_llm_reply(self, text: str):
+        self.say(text)
+        self.log(f"[BOT] {text}")
+
     def open_custom(self):
         self.log("[UI] カスタム画面を開きます")
         self.say("カスタムしよう！")
@@ -357,13 +451,53 @@ class MainWindow(QWidget):
     def say(self, text: str):
         self.balloon.setText(text)
 
+        # 自動スクロールで一番下へ
+        if hasattr(self, "balloon_scroll"):
+            bar = self.balloon_scroll.verticalScrollBar()
+            bar.setValue(bar.maximum())
+
+
     def on_enter(self):
         msg = self.input.text().strip()
         if not msg:
             return
+
         self.log(f"[USER] {msg}")
-        self.say(f"了解！「{msg}」だね。")
         self.input.clear()
+
+        # LLMが使えないなら無能ボット
+        if not self.llm_enabled:
+            reply = self.dumb_bot_reply(msg)
+            self.say(reply)
+            self.log(f"[BOT] {reply}")
+            return
+
+        self.say("考え中…")
+
+        # ===== 合わせ技プロンプト構築 =====
+        parts = []
+
+        # 1) いつも付ける：短いinstruction
+        if self.instruction_text:
+            parts.append(self.instruction_text)
+
+        # 2) いつも付ける：仕様の超要約（軽い）
+        if self.spec_summary_text:
+            parts.append("【Cube petit仕様（要約）】\n" + self.spec_summary_text)
+
+        # 3) 必要なときだけ付ける：仕様全文（重い）
+        if self.needs_spec_full(msg) and self.spec_full_text:
+            parts.append("【Cube petit仕様（詳細）】\n" + self.spec_full_text)
+
+        parts.append(f"ユーザー: {msg}\nCube petit:")
+
+        prompt = "\n\n".join(parts)
+
+        # UI固まらないようにスレッド
+        self.llm_worker = LLMWorker(prompt)
+        self.llm_worker.finished_text.connect(self.on_llm_reply)
+        self.llm_worker.error.connect(self.on_llm_error)
+        self.llm_worker.start()
 
     def on_back(self):
         self.log("[UI] 戻るが押されました")

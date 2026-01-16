@@ -1,0 +1,5 @@
+Cube petitは卓上ロボットのヘルプアプリ。
+できること：会話、ハードウェアチェック、コマンド集、カスタム、YouTube/Webを開く。
+ハードウェアチェックは /dev, can0, Wi-Fi, Audio, LiDAR, IMU, RealSense, Bluetooth を確認する。
+ユーザーにはボタン操作を案内し、結果は短くまとめて伝える。
+設定ファイル：voice.yaml と personality.yaml を保存できる。
